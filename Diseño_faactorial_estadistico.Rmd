@@ -1,0 +1,552 @@
+---
+title: "Diseño_factorial_estadistico"
+author: "Thomas G."
+date: "2025-03-24"
+output:
+  md_document:
+    variant: markdown_github
+---
+
+## Cargar librerias
+
+```{r warning=FALSE}
+library(ggplot2)
+library(agricolae)
+library(ggbreak)
+library(readxl)
+#library(ecodados)
+library(visdat)
+library(tidyverse)
+library(lattice)
+library(RVAideMemoire)
+library(DHARMa)
+library(performance)
+library(MuMIn)
+library(piecewiseSEM)
+library(MASS)
+library(ggExtra)
+library(Rmisc)
+library(emmeans) 
+library(sjPlot)
+library(bbmle)
+library(glmmTMB)
+library(ordinal)
+library(car)
+library(ecolottery)
+library(naniar)
+library(vcd)
+library(generalhoslem)
+```
+
+# Cargar Datos
+
+```{r}
+hplc<-data.frame(read_excel("C:/Users/User/Documents/Documentos_Tesis/Estadistica/Factorial_simple_2.xlsx"))
+attach(hplc)
+head(hplc)
+hplc$CGA
+Age<-factor(hplc$Edades)
+chak<-factor(hplc$Chakra)
+Light<-factor(hplc$Condiciones_luz)
+```
+
+# Analisis de Datos (en busca de normlaidad)
+
+```{r}
+
+#Paso 1 buscar normalidad (Gauss)
+
+dis<-lm(hplc$CGA~chak+Age*Light)
+summary(aov(dis))
+
+```
+
+### Paso 1.2 Graficos de varianza
+
+```{r}
+dca=aov((dis))
+names(dca)
+summary(dca)
+fit<-aov(CGA~chak+Age*Light,data = hplc)
+fit1<-as.data.frame.list(summary(fit))
+knitr::kable(
+  fit1, 
+  caption = "Tabla 3: ANOVA"
+)
+par(mfrow=c(1,1))
+plot(dca)
+library(agricolae)
+Grupos<- LSD.test(y = dca, trt = "CGA", group = T, console = T)
+Grupos<- LSD.test(y = dca, trt = "CGA", group = F, console = T)
+library(car)
+qqPlot(dis, main = "Gráfico QQ de Residuos", id.method = "identify")
+aov(formula = CGA~chak+Age*Light,data = hplc)
+```
+
+### Shapiro
+
+```{r}
+Residuos <-residuals(dca)
+shapiro.test(Residuos)
+```
+
+Concluimos por graficos que los datos no presentan una normalidad se propone realizar modelos lineales generalizados
+
+# Modelos lineales generalizados
+
+```{r}
+#Paquetes necesarios
+#install.packages("pander")
+library(pander)
+```
+
+## Modelos lineales generalizados-GAMMA
+
+#### Gamma link=identity ; reff=Chak "A"
+
+```{r}
+chak<-relevel(chak,ref="A")
+dis2<-glm(hplc$CGA~chak+Age*Light,family=Gamma(link="identity"))
+summary(dis2)
+```
+
+# Supuestos
+
+```{r}
+## Residuos vs valores ajsutados "glm"
+plot(dis2$fitted.values, resid(dis2, type = "response"),
+     xlab = "Valores Ajustados", ylab = "Residuos",
+     main = "Gráfico de Residuos vs Valores Ajustados")
+  abline(h = 0, col = "red")
+  
+```
+
+El grafico sugiere qie el mdoelo se ajusta RAZONABLEMENTE, existe el problema de posibles outliers y una posible heterocedasticidad leve.
+
+#### Se buscara modelos para verificar estos posibles problemas
+
+```{r warning=FALSE}
+# Instalar y cargar el paquete lmtest para la prueba de Breusch-Pagan para heterocedasticidad
+#install.packages("lmtest")
+library(lmtest)
+```
+
+### Realizar la prueba de Breusch-Pagan
+
+```{r}
+bptest(dis2)
+```
+
+Se tiene un P_value bajo por lo que se propone que los datos tienen hetocedasticidad
+
+### Realizar la prueba de Durbin-Watson para la Autocorrelación
+
+```{r}
+durbinWatsonTest(dis2)
+```
+
+El modelo propone que los datos tienen Autocorrelación por los tanto se propone Tranformar los datos
+
+### Instalar y cargar el paquete MASS para la transformación Box-Cox
+
+```{r warning=FALSE}
+#install.packages("MASS")
+library(MASS)
+```
+
+### Realizar la transformación Box-Cox
+
+```{r}
+boxcox(dis2)
+```
+
+Se procedera a aplicar la Transformación Logarítmica, dado que el intervalo de confianza incluye el 0, aplicar una transformación logarítmica a la variable de respuesta podría ayudar a estabilizar la varianza y mejorar la normalidad de los residuos.
+
+### Convertir a logaritmo
+
+```{r}
+hplc$CGA_transformed <- ifelse(hplc$CGA <= 0, log(hplc$CGA + 1), log(hplc$CGA))
+```
+
+### Ajusta el nuevo modelo GLM con la variable de respuesta transformada
+
+```{r}
+modelo_glm_transformed <- glm(CGA_transformed ~ chak+Age*Light, family = Gamma(link = "log"), data = hplc)
+```
+
+### Verifica el resumen del modelo
+
+```{r}
+summary(modelo_glm_transformed)
+```
+
+# Supuestos
+
+### Realizar predicciones con el modelo transformado
+
+```{r}
+predicciones_log <- predict(modelo_glm_transformed, type = "response")
+```
+
+### Analizar supuestos
+
+```{r}
+valores_reales_log <- log(hplc$CGA)
+```
+
+### Calculando MSE y MAE en la escala logarítmica
+
+```{r}
+mse_log <- mean((valores_reales_log - predicciones_log)^2)
+print(paste("MSE en escala logarítmica:", mse_log))
+```
+
+```{r}
+mae_log <- mean(abs(valores_reales_log - predicciones_log))
+print(paste("MAE en escala logarítmica:", mae_log))
+```
+
+### Convertir las predicciones de vuelta a la escala original
+
+```{r}
+predicciones_original <- exp(predicciones_log)
+```
+
+### Calculando MSE y MAE en la escala original
+
+```{r}
+mse_original <- mean((hplc$CGA - predicciones_original)^2)
+mae_original <- mean(abs(hplc$CGA - predicciones_original))
+
+print(paste("MSE en escala original:", mse_original))
+print(paste("MAE en escala original:", mae_original))
+```
+
+## Linealidad
+
+### Gráfico de dispersión para 'Chak'
+
+```{r}
+library(ggplot2)
+ggplot(hplc, aes(x = chak, y = CGA_transformed)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Relación entre Chak y la variable de respuesta transformada(CGA)")
+```
+
+### Gráfico de dispersión para 'Light'
+
+```{r}
+ggplot(hplc, aes(x = Light, y = CGA_transformed)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Relación entre Light y la variable de respuesta transformada(CGA)")
+```
+
+### Gráfico de dispersión para 'Age'
+
+```{r warning=FALSE}
+ggplot(hplc, aes(x = Age, y = CGA_transformed)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Relación entre Age y la variable de respuesta transformada(CGA)")
+```
+
+### Independencia
+
+```{r}
+residuos1 <- resid(modelo_glm_transformed)
+plot(residuos1, type = "l")
+```
+
+## Homocedasticidad
+
+### Gráfico de residuos vs valores ajustados
+
+```{r}
+plot(predict(modelo_glm_transformed), residuos1)
+abline(h = 0, col = "red")
+
+```
+
+## Normalidad de los residuos
+
+### QQ-plot de los residuos
+
+```{r}
+qqnorm(residuos1)
+qqline(residuos1, col = "red")
+```
+
+## Ausencia de multicolinealidad
+
+### Para verificar la multicolinealidad
+
+```{r warning=FALSE}
+library(car)
+vif(modelo_glm_transformed)
+```
+
+# Interpretación General
+
+Linealidad: Dado que se esta trabajando con variables categóricas, la "linealidad" no es el enfoque, sino más bien si las diferencias entre las categorías son estadísticamente significativas.
+
+Independencia: No parece haber patrones claros que sugieran problemas de independencia.
+
+Homocedasticidad: No hay señales evidentes de heterocedasticidad, aunque una inspección visual no siempre es suficiente para descartarla.
+
+Normalidad: Los residuos parecen ser aproximadamente normales con algunas posibles desviaciones en los extremos.
+
+Multicolinealidad: No hay indicaciones de multicolinealidad problemática en el modelo.
+
+# Reajuste del modelo
+
+```{r}
+modelo_glm_retransformed <- glm(CGA_transformed ~ chak+Age*Light, family = Gamma(), data = hplc)
+summary(modelo_glm_retransformed)
+```
+
+# Validacion del modelo
+
+```{r message=FALSE, warning=FALSE}
+# Instalar y cargar el paquete 'caret' para la validación cruzada
+#install.packages("caret")
+library(caret)
+
+#Ver datos para ajustar a la validacion del modelo
+print(names(hplc))
+print(sum(is.na(hplc$CGA_transformed)))
+print(sum(is.na(hplc$chak)))
+print(sum(is.na(hplc$Age)))
+print(sum(is.na(hplc$Light)))
+hplc$Chakra <- factor(hplc$Chakra)
+hplc$Edades <- factor(hplc$Edades)
+hplc$Condiciones_luz <- factor(hplc$Condiciones_luz)
+```
+
+## Configuración de la validación cruzada
+
+```{r}
+control <- trainControl(method = "cv", number = 10)
+```
+
+## Entrenamiento del modelo con validación cruzada
+
+```{r}
+set.seed(123) # Para reproducibilidad
+modelo_cv <- train(CGA_transformed ~ Chakra + Edades * Condiciones_luz, data = hplc, method = "glm", trControl = control)
+```
+
+# Resumen del modelo con validación cruzada
+
+```{r}
+print(modelo_cv)
+```
+
+Estos resultados sugieren que el modelo tiene un buen ajuste estadístico en términos de la capacidad para explicar la variabilidad de los datos y que los errores de predicción son relativamente bajos.
+
+# Gráfico de diagnóstico
+
+```{r}
+par(mfrow = c(2, 2))
+plot(modelo_glm_retransformed)
+```
+
+## Diagnostico de influencia
+
+### Calculando la distancia de Cook
+
+```{r}
+cooksd <- cooks.distance(modelo_glm_retransformed)
+```
+
+### Identificar puntos influyentes
+
+```{r}
+plot(cooksd, pch = "*", cex = 2, main = "Distancia de Cook")
+abline(h = 4/(nrow(df)-length(coef(modelo_glm_retransformed))), col = "red")
+```
+
+## Predicciones
+
+### Hacer predicciones en la escala logarítmica
+
+```{r}
+predicciones_log <- predict(modelo_glm_retransformed, newdata = hplc, type = "response")
+```
+
+### Retransformar las predicciones a la escala original
+
+```{r}
+hplc$Predicciones_CGA <- exp(predicciones_log)
+```
+
+### Plot
+
+```{r}
+head(hplc)
+library(ggplot2)
+#chack
+ggplot(hplc, aes(x = CGA, y = Predicciones_CGA)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "red") +
+  labs(x = "Valores Observados de CGA", y = "Valores Predichos de CGA", title = "Comparación de Valores Observados y Predichos") +
+  theme_minimal()
+
+```
+
+Parece que el modelo hace un buen trabajo al predecir CGA, especialmente para valores más bajos de CGA. Si hay un patrón en los errores de predicción a medida que aumenta CGA.
+
+# ANOVA
+
+## Realizar un ANOVA
+
+```{r}
+modelo_anova <- aov(CGA_transformed ~chak+Age*Light, data = hplc)
+summary(modelo_anova)
+```
+
+# Tukey
+
+### chak
+
+```{r}
+tukey_results <- TukeyHSD(modelo_anova, "chak")
+print(tukey_results)
+```
+
+Estos resultados sugieren que hay diferencias significativas en la variable de respuesta transformada entre los distintos niveles de chakra. Específicamente, el grupo C tiene una media significativamente menor que los grupos A y B, y el grupo B tiene una media significativamente mayor que el grupo A.
+
+## Age
+
+```{r}
+tukey_results2 <- TukeyHSD(modelo_anova, "Age")
+print(tukey_results2)
+```
+
+Para Age, cada uno de los tiempos posteriores (T1 y T2) tiene una media significativamente menor en la variable de respuesta transformada en comparación con el tiempo base T0. Además, T2 es significativamente menor que T1.
+
+light: No es estadisticamente significativo
+
+# Plot tukey
+
+## chak
+
+#### Primero, creamos un dataframe con los resultados de la prueba de Tukey para 'chak'
+
+```{r}
+tukey_chak <- data.frame(
+  group = c("B-A", "C-A", "C-B"),
+  diff = c(0.3487368, -0.6466886, -0.9954254),
+  lwr = c(0.1313065, -0.8641190, -1.2128558),
+  upr = c(0.5661672, -0.4292582, -0.7779951)
+)
+```
+
+```{r}
+# Ahora, creamos el gráfico de barra con ggplot2
+library(ggplot2)
+
+chak_plot <- ggplot(hplc, aes(x = Chakra, y = CGA_transformed)) +
+  geom_boxplot(fill = "#A1D99B", colour = "#00B050") +
+  labs(title = "Distribution of CGA_transformed Chakra", x = "Chakra", y = "CGA_transformed") +
+  theme(plot.title = element_text(size = 15))
+# Save plot
+ggsave(filename = "E:/Paper/Diseño_factorial_imagenes/Chak.pdf", plot = chak_plot,
+       width = 6, height = 5, units = "in", dpi = 300, scale = 1.7)
+ggsave(filename = "E:/Paper/Diseño_factorial_imagenes/Chak.png", plot = chak_plot,
+       width = 6, height = 5, units = "in", dpi = 300, scale = 1.7)
+chak_plot
+
+```
+
+## Age
+
+```{r}
+# Creamos un dataframe con los resultados de la prueba de Tukey para 'Age'
+tukey_age <- data.frame(
+  group = c("T1-T0", "T2-T0", "T2-T1"),
+  diff = c(-0.4544677, -0.8103661, -0.3558984),
+  lwr = c(-0.6718981, -1.0277965, -0.5733288),
+  upr = c(-0.2370374, -0.5929358, -0.1384681)
+)
+
+# Creamos el gráfico de barra para 'Age'
+ages_plot <-ggplot(hplc, aes(x = Edades, y = CGA_transformed)) +
+  geom_boxplot(fill = "#A1D99B", colour = "#00B050") +
+  labs(title = "Distribution of CGA_transformed for ages", x = "Ages", y = "CGA_transformed") +
+  theme(plot.title = element_text(size = 15))
+
+# Save plot
+ggsave(filename = "E:/Paper/Diseño_factorial_imagenes/Ages.pdf", plot = ages_plot,
+       width = 6, height = 5, units = "in", dpi = 300, scale = 1.7)
+ggsave(filename = "E:/Paper/Diseño_factorial_imagenes/Ages.png", plot = ages_plot,
+       width = 6, height = 5, units = "in", dpi = 300, scale = 1.7)
+ages_plot
+```
+
+## Creamos el gráfico de barra para 'Light'
+
+```{r}
+
+light_plot <-ggplot(hplc, aes(x = Light, y = CGA_transformed)) +
+  geom_boxplot(fill = "#A1D99B", colour = "#00B050") +
+  labs(title = "Distribution of CGA_transformed by Light", x = "Shadow/Light", y = "CGA_transformed") +
+  theme(plot.title = element_text(size = 15))
+
+# Save plot
+ggsave(filename = "E:/Paper/Diseño_factorial_imagenes/light.pdf", plot = light_plot,
+       width = 6, height = 5, units = "in", dpi = 300, scale = 1.7)
+ggsave(filename = "E:/Paper/Diseño_factorial_imagenes/light.png", plot = light_plot,
+       width = 6, height = 5, units = "in", dpi = 300, scale = 1.7)
+light_plot
+```
+
+# FIN
+
+# Tabla de Medias con emmeans (Modelo Ajustado):
+
+```{r}
+library(emmeans)
+# Usar los mismos nombres que en el modelo (chak, Age, Light)
+medias_em <- emmeans(modelo_glm_retransformed, ~ chak + Age + Light)
+tabla_em <- as.data.frame(medias_em)
+
+# Formatear
+knitr::kable(tabla_em,
+  caption = "Medias Ajustadas por el Modelo GLM",
+  digits = 3
+)
+```
+
+# Tabla de Medias con Errores Estándar (para publicación):
+
+```{r}
+rm(sd)  # Elimina el data.frame llamado "sd"
+# Deben devolver "function"
+class(mean)
+class(sd)
+class(length)
+```
+
+```{r}
+# Calcular media, error estándar y tamaño de muestra
+media <- aggregate(CGA ~ chak + Age + Light, data = hplc, FUN = mean)
+sd <- aggregate(CGA ~ chak + Age + Light, data = hplc, FUN = sd)  # Ahora usa la función correcta
+n <- aggregate(CGA ~ chak + Age + Light, data = hplc, FUN = length)
+
+# Combinar y formatear
+tabla_final <- Reduce(
+  function(x, y) merge(x, y, by = c("chak", "Age", "Light")),
+  list(media, sd, n)
+)
+colnames(tabla_final) <- c("Chakra", "Edad", "Luz", "Media", "SD", "n")
+tabla_final$SE <- tabla_final$SD / sqrt(tabla_final$n)
+tabla_final$`Media ± SE` <- sprintf("%.2f ± %.2f", tabla_final$Media, tabla_final$SE)
+
+# Mostrar tabla
+knitr::kable(
+  tabla_final[, c("Chakra", "Edad", "Luz", "Media ± SE", "n")],
+  caption = "Medias Aritméticas con Error Estándar (Datos Originales)"
+)
+```
